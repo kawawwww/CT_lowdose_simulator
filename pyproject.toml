@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ct-lowdose-sim"
+dynamic = ["version"]
+description = "Simulate low-dose CT images from DICOM series by projection-domain noise insertion (ASTRA Toolbox)"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+keywords = ["CT", "low-dose", "noise simulation", "DICOM", "ASTRA", "medical imaging"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+dependencies = [
+    "numpy>=1.22",
+    "pydicom>=2.3",
+    "matplotlib>=3.5",
+    "astra-toolbox>=2.2",
+    "PySide6-Essentials>=6.5",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+ctlowdose = "ctlowdose.cli:main"
+
+[project.gui-scripts]
+ctlowdose-gui = "ctlowdose.gui:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "ctlowdose.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ctlowdose = ["resources/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

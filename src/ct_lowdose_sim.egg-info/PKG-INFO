@@ -1,0 +1,153 @@
+Metadata-Version: 2.4
+Name: ct-lowdose-sim
+Version: 0.1.0
+Summary: Simulate low-dose CT images from DICOM series by projection-domain noise insertion (ASTRA Toolbox)
+License: MIT License
+        
+        Copyright (c) 2026 ct-lowdose-sim contributors
+        
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files (the "Software"), to deal
+        in the Software without restriction, including without limitation the rights
+        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        copies of the Software, and to permit persons to whom the Software is
+        furnished to do so, subject to the following conditions:
+        
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software.
+        
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        SOFTWARE.
+        
+Keywords: CT,low-dose,noise simulation,DICOM,ASTRA,medical imaging
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: Microsoft :: Windows
+Classifier: Operating System :: POSIX :: Linux
+Classifier: Intended Audience :: Science/Research
+Classifier: Topic :: Scientific/Engineering :: Medical Science Apps.
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy>=1.22
+Requires-Dist: pydicom>=2.3
+Requires-Dist: matplotlib>=3.5
+Requires-Dist: astra-toolbox>=2.2
+Requires-Dist: PySide6-Essentials>=6.5
+Provides-Extra: test
+Requires-Dist: pytest>=7; extra == "test"
+Dynamic: license-file
+
+# CT Low-Dose Simulator
+
+[![tests](https://github.com/OWNER/ct-lowdose-sim/actions/workflows/tests.yml/badge.svg)](https://github.com/OWNER/ct-lowdose-sim/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+通常線量で撮影された CT 画像（DICOM）から、**低線量で撮影した場合の CT 画像を模擬する**デスクトップアプリです。
+投影データ上で光子数に応じたノイズを付加するため、画像上でガウシアンノイズを足すよりも現実に近いノイズ（被写体の厚みに依存する強度・筋状のパターン）が得られます。
+
+*English: A desktop app that simulates reduced-dose CT images from routine-dose DICOM series by projection-domain noise insertion. The target dose is set relative to the mAs recorded in the DICOM header, and the noise level is calibrated against the noise measured in the original image.*
+
+![screenshot](docs/screenshot.png)
+
+## 特長
+
+- **DICOM の撮影条件を基準に線量を指定** — `Exposure` / `XRayTubeCurrent × ExposureTime` などから元画像の mAs を読み取り、「1/2 線量」「20 mAs」のように指定できます。スライスごとに読むため管電流変調にも対応します。
+- **差分ノイズの付加** — 元画像がすでに持っているノイズを考慮し、目標線量との差の分だけノイズを付加します。
+- **ノイズ量の校正** — 元画像の均一な領域（ROI）のノイズ SD から、シミュレーションの光子数を自動で決めます。
+- **解像度・CT 値を保持** — ノイズ成分だけを再構成して元画像に加算するため、画像がぼけたり CT 値がずれたりしません。
+- **GPU / CPU** — NVIDIA GPU があれば CUDA で高速に、なければ CPU で動作します。
+- **DICOM 出力** — 元のヘッダを引き継ぎ、UID の振り直し・撮影条件タグ（mA, mAs, CTDIvol）の更新を行います。処理条件は JSON で保存されます。
+
+## インストール
+
+Python 3.10 以上が必要です。
+
+```bash
+pip install git+https://github.com/OWNER/ct-lowdose-sim.git
+```
+
+開発用にソースから入れる場合:
+
+```bash
+git clone https://github.com/OWNER/ct-lowdose-sim.git
+cd ct-lowdose-sim
+pip install -e ".[test]"
+```
+
+[ASTRA Toolbox](https://astra-toolbox.com/)（PyPI 版は CUDA ランタイム同梱）と PySide6 も自動でインストールされます。GPU を使う場合は NVIDIA ドライバが必要です。
+
+## 使い方（GUI）
+
+```bash
+ctlowdose-gui
+```
+
+1. **入力フォルダ** に CT シリーズの DICOM フォルダを指定します。撮影条件（mAs, kVp, 再構成カーネルなど）が表示されます。
+2. **目標線量** を「線量比」（例: 0.5 = 1/2 線量）または「目標 mAs」で指定します。
+3. **ノイズ量の校正**: 画像上の肝実質・筋肉・大動脈など**均一な領域を左クリック**して ROI を置き（右クリックで削除）、「校正を実行」を押します。
+4. **プレビュー** で表示中のスライスの結果を確認します。ROI 一覧に元画像と模擬画像の平均±SD が表示されます。
+5. **出力フォルダ** を指定して「一括処理して保存」を押します。
+
+## 使い方（コマンドライン）
+
+```bash
+# 1/2 線量。スライス48の2か所のROIで校正してから処理
+ctlowdose INPUT_DIR OUTPUT_DIR --ratio 0.5 --calibrate-roi 48:280:115:18 --calibrate-roi 48:380:222:10
+
+# 目標 20 mAs、校正済みの光子数を直接指定
+ctlowdose INPUT_DIR OUTPUT_DIR --target-mAs 20 --photons-per-mAs 9800
+```
+
+ROI は `スライス番号:行:列:半径`（スライス番号は 0 始まり、スライス位置順）です。`ctlowdose --help` で全オプションを表示します。
+
+## 手法
+
+1. CT 値を線減弱係数に変換: μ = μ_water (1 + HU/1000)
+2. 平行ビームで順投影し、画素サイズ（`PixelSpacing`）を掛けて線積分 p を求め、透過率 T = exp(−p) を得る
+3. 元画像の入射光子数 I_ref = `photons_per_mAs` × mAs、線量比 a に対して
+   - 期待カウント a·I_ref·T に、分散 a(1−a)·I_ref·T の量子ノイズと電子ノイズを付加
+   - 元画像に含まれるノイズ（分散 1/(I_ref·T)）と合わせて、log 領域の分散が低線量相当の 1/(a·I_ref·T) になる
+4. 対数変換したノイズ成分のみを FBP（Ram-Lak）で再構成し、元画像に加算
+
+### 校正
+
+`photons_per_mAs` は、投影形状（2D 平行ビーム）や再構成フィルタの違いを吸収する**実効値**であり、実機の値ではありません。
+そこで、「元画像と同じ線量のノイズを生成したとき、その SD が元画像の ROI 内 SD と一致する」ように反復的に決めます（SD ∝ 1/√光子数）。
+これにより、1/2 線量の画像のノイズ SD は元画像の約 √2 倍になります。
+
+## 出力
+
+- 元ファイルと同じ名前の DICOM（int16, RescaleSlope=1, RescaleIntercept=0, Explicit VR Little Endian）
+  - `SeriesInstanceUID` / `SOPInstanceUID` を新規発行
+  - `XRayTubeCurrent`, `Exposure`, `CTDIvol` などを線量比に合わせて更新
+  - `ImageType` を `DERIVED\SECONDARY` に、`SeriesDescription` を `Simulated low dose x0.5` などに変更
+- `ctlowdose_params.json` — ソフトウェアのバージョン、計算方式、全パラメータ、スライスごとの mAs
+
+## 制限事項
+
+- 2D 平行ビーム・単色 X 線のモデルです。ビームハードニング、ボウタイフィルタ、ヘリカル補間、自動露出制御の挙動は模擬しません。
+- ノイズの SD は校正で一致させますが、ノイズの質感（NPS）は元画像の再構成カーネルとは一致しません。
+- 逐次近似再構成（AIDR, ASiR, iDose など）の画像では、元画像のノイズが光子数から期待されるより小さいため、付加するノイズが過小になります。FBP 画像での使用を推奨します。
+- 詳細設定（投影数、検出器ピッチ、電子ノイズ、計算方式）を変更したら校正をやり直してください。GPU と CPU では再構成の実装が異なるため、校正値がわずかに異なります。
+
+## 免責
+
+本ソフトウェアは研究・教育目的のものです。**臨床診断には使用しないでください。**
+患者データを扱う際は、所属機関の規程に従って匿名化・管理してください（`.gitignore` で `*.dcm` を除外しています）。
+
+## 参考文献
+
+- W. van Aarle et al., "Fast and flexible X-ray tomography using the ASTRA toolbox," *Optics Express* 24(22), 2016.
+- L. Yu et al., "Development and validation of a practical lower-dose-simulation tool for optimizing CT scan protocols," *Journal of Computer Assisted Tomography* 36(4), 2012.
+
+スクリーンショットの画像は [CHAOS challenge](https://chaos.grand-challenge.org/) のデータセットを使用しています。
+
+## ライセンス
+
+[MIT License](LICENSE)。依存ライブラリの ASTRA Toolbox は GPLv3 です。

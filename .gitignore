@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# 患者データを誤ってコミットしないため
+*.dcm
+*.DCM
+*.nii
+*.nii.gz
+ctlowdose_params.json
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

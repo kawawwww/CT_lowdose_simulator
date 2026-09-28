@@ -1,0 +1,5 @@
+[console_scripts]
+ctlowdose = ctlowdose.cli:main
+
+[gui_scripts]
+ctlowdose-gui = ctlowdose.gui:main
