@@ -1,0 +1,2 @@
+# CT_lowdose_simulator
+DICOMのCT画像から低線量CT画像を模擬するデスクトップアプリ。投影データ上で光子ノイズを付加し、DICOMのmAsを基準に線量を指定、ROIでノイズ量を校正。GPU/CPU対応。
