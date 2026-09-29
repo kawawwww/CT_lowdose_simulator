@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "CT Low-Dose Simulator"
+abstract: >-
+  A desktop application that simulates reduced-dose CT images from
+  routine-dose DICOM series by projection-domain noise insertion.
+  The target dose is set relative to the mAs recorded in the DICOM header,
+  and the noise level is calibrated against the noise measured in the
+  original image.
+authors:
+  - family-names: "Kawaguchi"
+    given-names: "Ren"
+    affiliation: "Juntendo University Hospital"
+    orcid: "https://orcid.org/0009-0001-1092-021X"
+version: 0.1.0
+date-released: 2026-09-29
+license: MIT
+repository-code: "https://github.com/kawawwww/CT_lowdose_simulator"
+keywords:
+  - computed tomography
+  - low-dose CT
+  - noise simulation
+  - DICOM
+  - ASTRA Toolbox
+references:
+  - type: article
+    title: "Fast and flexible X-ray tomography using the ASTRA toolbox"
+    authors:
+      - family-names: "van Aarle"
+        given-names: "Wim"
+    journal: "Optics Express"
+    volume: 24
+    issue: 22
+    year: 2016
+    doi: "10.1364/OE.24.025129"

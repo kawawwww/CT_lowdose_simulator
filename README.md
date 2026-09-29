@@ -303,6 +303,22 @@ CHAOS データセット症例 1（140 mAs, 120 kVp）で、肝実質・傍脊�
 本ソフトウェアは研究・教育目的のものです。**臨床診断には使用しないでください。**
 患者データを扱う際は、所属機関の規程に従って匿名化・管理してください（`.gitignore` で `*.dcm` を除外しています）。
 
+## 引用
+
+研究で本ソフトウェアを使用した場合は、次のように引用してください。GitHub のリポジトリページ右側の **Cite this repository** から APA / BibTeX 形式でもコピーできます（[`CITATION.cff`](CITATION.cff)）。
+
+> Kawaguchi, R. (2026). *CT Low-Dose Simulator* (Version 0.1.0) [Computer software]. https://github.com/kawawwww/CT_lowdose_simulator
+
+```bibtex
+@software{kawaguchi_ct_lowdose_simulator,
+  author  = {Kawaguchi, Ren},
+  title   = {{CT Low-Dose Simulator}},
+  version = {0.1.0},
+  year    = {2026},
+  url     = {https://github.com/kawawwww/CT_lowdose_simulator}
+}
+```
+
 ## 参考文献
 
 - W. van Aarle et al., "Fast and flexible X-ray tomography using the ASTRA toolbox," *Optics Express* 24(22), 2016.
