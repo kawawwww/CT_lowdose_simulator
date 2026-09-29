@@ -83,6 +83,11 @@ class SliceCanvas(FigureCanvasQTAgg):
     def show_images(self, panels, window, level, rois):
         """panels: [(image, title)], rois: [(row, col, radius, label)]."""
         self.fig.clear()
+        #OSのテーマ (ライト/ダーク) に背景と文字色を合わせる
+        pal = QtWidgets.QApplication.palette()     #キャンバス自身のパレットはmatplotlibが白に固定している
+        role = getattr(QtGui.QPalette, "ColorRole", QtGui.QPalette)
+        self.fig.set_facecolor(pal.color(role.Window).name())
+        text_color = pal.color(role.WindowText).name()
         if not panels:
             self.draw_idle()
             return
@@ -90,7 +95,7 @@ class SliceCanvas(FigureCanvasQTAgg):
         vmin, vmax = level - window / 2, level + window / 2
         for ax, (img, title) in zip(axes, panels):
             ax.imshow(img, cmap="gray", vmin=vmin, vmax=vmax, interpolation="nearest")
-            ax.set_title(title, fontsize=9)
+            ax.set_title(title, fontsize=9, color=text_color)
             ax.set_axis_off()
             for r, c, rad, label in rois:
                 ax.add_patch(Circle((c, r), rad, fill=False, ec="red", lw=1.2))
@@ -350,8 +355,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sp_mu.setRange(0.01, 2.0)
         self.sp_mu.setDecimals(4)
         self.sp_mu.setSingleStep(0.005)
-        self.sp_mu.setValue(d.mu_water)
+        self.sp_mu.setValue(core.mu_water_for_kvp(None))
         self.sp_mu.setSuffix(" /cm")
+        self.sp_mu.setEnabled(False)
+        self.chk_mu_auto = QtWidgets.QCheckBox("kVpから自動")
+        self.chk_mu_auto.setChecked(True)
+        self.chk_mu_auto.setToolTip("DICOMの管電圧(KVP)から実効エネルギーを見積もり、水の線減弱係数を決めます")
+        self.chk_mu_auto.toggled.connect(self._on_mu_auto_toggled)
+        mu_row = QtWidgets.QHBoxLayout()
+        mu_row.addWidget(self.sp_mu, 1)
+        mu_row.addWidget(self.chk_mu_auto)
         self.chk_subtract = QtWidgets.QCheckBox("元画像のノイズ分を差し引く (推奨)")
         self.chk_subtract.setChecked(d.subtract_existing_noise)
         self.chk_insert = QtWidgets.QCheckBox("ノイズ画像を元画像に加算 (推奨: 解像度・CT値を保持)")
@@ -369,7 +382,7 @@ class MainWindow(QtWidgets.QMainWindow):
         f.addRow("投影数", self.sp_angles)
         f.addRow("検出器ピッチ", self.sp_det)
         f.addRow("電子ノイズSD [count]", self.sp_sigma)
-        f.addRow("水のμ", self.sp_mu)
+        f.addRow("水のμ", mu_row)
         f.addRow(self.chk_subtract)
         f.addRow(self.chk_insert)
         f.addRow("乱数シード", self.sp_seed)
@@ -387,6 +400,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.chk_subtract.toggled.connect(self._invalidate_preview)
         self.chk_insert.toggled.connect(self._invalidate_preview)
         return g
+
+    def _auto_mu(self) -> float:
+        return core.mu_water_for_kvp(self.series.kvp if self.series else None)
+
+    def _on_mu_auto_toggled(self, auto: bool):
+        self.sp_mu.setEnabled(not auto)
+        if auto:
+            self.sp_mu.setValue(self._auto_mu())   #表示を自動値に戻す (valueChangedでプレビュー更新)
+        self._invalidate_preview()
 
     def _build_run_group(self):
         g = QtWidgets.QGroupBox("実行")
@@ -461,7 +483,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return core.SimConfig(
             num_angles=self.sp_angles.value(),
             det_spacing=self.sp_det.value(),
-            mu_water=self.sp_mu.value(),
+            mu_water=None if self.chk_mu_auto.isChecked() else self.sp_mu.value(),
             photons_per_mAs=self.sp_ppm.value(),
             sigma_readout=self.sp_sigma.value(),
             subtract_existing_noise=self.chk_subtract.isChecked(),
@@ -637,14 +659,20 @@ class MainWindow(QtWidgets.QMainWindow):
             mAs_text = "不明 (仮定値を使用)"
         parts = [f"{len(s.paths)}枚  {s.rows}×{s.cols}  {s.pixel_spacing_mm:.3f} mm/px", mAs_text]
         extra = []
-        if s.kvp:
-            extra.append(f"{s.kvp:g} kVp")
+        extra.append(f"{s.kvp:g} kVp" if s.kvp else "kVp不明")
+        if self.chk_mu_auto.isChecked():
+            self.sp_mu.blockSignals(True)
+            self.sp_mu.setValue(self._auto_mu())
+            self.sp_mu.blockSignals(False)
         if s.kernel:
             extra.append(f"kernel {s.kernel}")
         if s.manufacturer:
             extra.append(s.manufacturer)
         if extra:
             parts.append("  ".join(extra))
+        kev = core.effective_energy_kev(s.kvp or core.DEFAULT_KVP)
+        parts.append(f"実効エネルギー≈{kev:.0f} keV  水のμ={self._auto_mu():.4f} /cm"
+                     + ("" if s.kvp else " (120 kVpと仮定)"))
         self.lbl_info.setText("\n".join(parts))
         self.slider.blockSignals(True)
         self.slider.setRange(0, len(s.paths) - 1)
@@ -797,6 +825,7 @@ class MainWindow(QtWidgets.QMainWindow):
         rois = list(self.rois)
         paths = {r["slice"]: self.series.paths[r["slice"]] for r in rois}
         mAs = {s: self.slice_mAs(s) for s in paths}   #ウィジェットはGUIスレッドで読む
+        kvp = self.series.kvp
 
         def task(th):
             samples = {}
@@ -807,8 +836,8 @@ class MainWindow(QtWidgets.QMainWindow):
                         hu, core.pixel_size_cm(ds), mAs[r["slice"]], [])
                 smp = samples[r["slice"]]
                 smp.masks.append(core.circle_mask(smp.hu.shape, r["row"], r["col"], r["radius"]))
-            with core.Simulator(cfg) as sim:
-                th.message.emit(f"校正開始 ({sim.backend.upper()}, ROI {len(rois)}個)")
+            with core.Simulator(cfg, kvp=kvp) as sim:
+                th.message.emit(f"校正開始 ({sim.backend.upper()}, ROI {len(rois)}個, μ_w = {sim.mu_water:.4f} /cm)")
                 return sim.calibrate(list(samples.values()), progress=th.progress.emit,
                                      log=th.message.emit, should_stop=th.stop_requested)
 
@@ -838,11 +867,12 @@ class MainWindow(QtWidgets.QMainWindow):
         dose = self.current_dose()
         mAs = self.slice_mAs(idx)
         path = self.series.paths[idx]
+        kvp = self.series.kvp
 
         def task(th):
             ds, hu = core.read_slice(path)
             a = dose.ratio_for(mAs)
-            with core.Simulator(cfg) as sim:
+            with core.Simulator(cfg, kvp=kvp) as sim:
                 return idx, sim.simulate(hu, core.pixel_size_cm(ds), mAs, a), a
 
         def done(result):

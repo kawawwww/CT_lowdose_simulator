@@ -40,7 +40,7 @@ PARAMS_FILENAME = "ctlowdose_params.json"
 class SimConfig:
     num_angles: int = 1024               #投影数 (0〜π)
     det_spacing: float = 1.0             #検出器ピッチ [画素]
-    mu_water: float = 0.2                #水の線減弱係数 [1/cm]
+    mu_water: Optional[float] = None     #水の線減弱係数 [1/cm] (None: 管電圧から自動)
     photons_per_mAs: float = 3000.0      #1mAsあたりの入射光子数 (校正で決める実効値)
     sigma_readout: float = 5.0           #電子ノイズ標準偏差 [カウント]
     subtract_existing_noise: bool = True #元画像のノイズ分を差し引く
@@ -73,6 +73,33 @@ class DoseSpec:
         if self.mode == "ratio":
             return f"x{self.ratio:g}"
         return f"{self.target_mAs:g} mAs"
+
+
+###################
+###水の線減弱係数###
+DEFAULT_KVP = 120.0
+
+#水の質量減弱係数 μ/ρ [cm²/g] (NIST XCOM, コヒーレント散乱を含む。水は ρ=1 g/cm³ なので μ と同値)
+_WATER_MU = [(40.0, 0.2683), (50.0, 0.2269), (60.0, 0.2059), (80.0, 0.1837), (100.0, 0.1707)]
+
+#管電圧 [kVp] → 実効エネルギー [keV] の目安 (一般的なCTの付加フィルタ・ボウタイ込み、概算)
+_EFFECTIVE_KEV = [(70.0, 46.0), (80.0, 50.0), (100.0, 56.0), (120.0, 63.0), (140.0, 70.0), (150.0, 74.0)]
+
+
+def effective_energy_kev(kvp: float) -> float:
+    kv, ke = zip(*_EFFECTIVE_KEV)
+    return float(np.interp(kvp, kv, ke))
+
+
+def water_mu_at_kev(kev: float) -> float:
+    """実効エネルギーでの水の線減弱係数 [1/cm] (両対数補間)."""
+    e, mu = zip(*_WATER_MU)
+    return float(np.exp(np.interp(np.log(kev), np.log(e), np.log(mu))))
+
+
+def mu_water_for_kvp(kvp: Optional[float]) -> float:
+    """管電圧から水の線減弱係数を見積もる。不明なら 120 kVp とみなす."""
+    return water_mu_at_kev(effective_energy_kev(kvp if kvp else DEFAULT_KVP))
 
 
 ############
@@ -171,8 +198,10 @@ class CalibrationResult:
 
 
 class Simulator:
-    def __init__(self, cfg: SimConfig):
+    def __init__(self, cfg: SimConfig, kvp: Optional[float] = None):
+        """kvp: 入力画像の管電圧。cfg.mu_water が None のとき μ_w の決定に使う."""
         self.cfg = cfg
+        self.mu_water = float(cfg.mu_water) if cfg.mu_water else mu_water_for_kvp(kvp)
         self.backend = resolve_backend(cfg.backend)
         self.rng = np.random.default_rng(cfg.seed)
         self._recons = {}
@@ -195,10 +224,10 @@ class Simulator:
         return self._recons[shape]
 
     def hu_to_mu(self, hu: np.ndarray) -> np.ndarray:
-        return self.cfg.mu_water * (1 + np.maximum(hu, -1000) / 1000)
+        return self.mu_water * (1 + np.maximum(hu, -1000) / 1000)
 
     def mu_to_hu(self, mu: np.ndarray) -> np.ndarray:
-        return 1000 * (mu / self.cfg.mu_water - 1)
+        return 1000 * (mu / self.mu_water - 1)
 
     def project(self, hu: np.ndarray, pixel_size_cm: float):
         #(線積分[μ×画素], 透過率, Reconstructor) を返す
@@ -233,7 +262,7 @@ class Simulator:
         P_noisy = np.log(I0 / I_noisy) / pixel_size_cm
         if self.cfg.insert_noise_only:
             #FBPは線形なので ノイズ成分だけ再構成して元画像に足す
-            return hu + 1000 * rec.fbp(P_noisy - P) / self.cfg.mu_water
+            return hu + 1000 * rec.fbp(P_noisy - P) / self.mu_water
         return self.mu_to_hu(rec.fbp(P_noisy))
 
     def reconstruct_clean(self, hu: np.ndarray, pixel_size_cm: float) -> np.ndarray:
@@ -285,7 +314,7 @@ class Simulator:
                     I_noisy = rng.poisson(I_clean).astype(np.float64) \
                         + rng.normal(0.0, cfg.sigma_readout, size=T.shape)
                     I_noisy = np.maximum(I_noisy, cfg.eps)
-                    noise_hu = 1000 * rec.fbp(np.log(I_clean / I_noisy) / L) / cfg.mu_water
+                    noise_hu = 1000 * rec.fbp(np.log(I_clean / I_noisy) / L) / self.mu_water
                     vs.extend(float(noise_hu[m].var()) for m in masks)
             return float(np.mean(vs))
 
@@ -523,15 +552,22 @@ def process_series(paths: Sequence[str], out_dir: str, cfg: SimConfig, dose: Dos
     description = f"Simulated low dose {dose.describe()}"
     records = []
     warned_high = False
+    warned_kvp = False
     stopped = False
-    with Simulator(cfg) as sim:
-        log(f"backend: {sim.backend.upper()}  photons_per_mAs = {cfg.photons_per_mAs:.1f}")
+    kvp = _num(pydicom.dcmread(paths[0], stop_before_pixels=True, force=True), "KVP")
+    with Simulator(cfg, kvp=kvp) as sim:
+        mu_src = "手動" if cfg.mu_water else f"{kvp:g} kVp から自動" if kvp else "kVp不明のため 120 kVp と仮定"
+        log(f"backend: {sim.backend.upper()}  photons_per_mAs = {cfg.photons_per_mAs:.1f}  "
+            f"μ_w = {sim.mu_water:.4f} /cm ({mu_src})")
         for i, path in enumerate(paths):
             if should_stop and should_stop():
                 log("中止しました")
                 stopped = True
                 break
             ds, hu = read_slice(path)
+            if not warned_kvp and _num(ds, "KVP") != kvp:
+                log(f"警告: シリーズ内で管電圧が異なります ({kvp} / {_num(ds, 'KVP')} kVp)。μ_w は1枚目の値を使います")
+                warned_kvp = True
             mAs, src = get_mAs(ds)
             if mAs is None:
                 if default_mAs is None:
@@ -549,6 +585,7 @@ def process_series(paths: Sequence[str], out_dir: str, cfg: SimConfig, dose: Dos
             if progress:
                 progress(i + 1, len(paths))
         backend = sim.backend
+        mu_used = sim.mu_water
 
     summary = {
         "software": f"ct-lowdose-sim {__version__}",
@@ -556,6 +593,8 @@ def process_series(paths: Sequence[str], out_dir: str, cfg: SimConfig, dose: Dos
         "backend": backend,
         "astra_version": getattr(astra, "__version__", ""),
         "config": asdict(cfg),
+        "kvp": kvp,
+        "mu_water_used": mu_used,
         "dose": asdict(dose),
         "default_mAs": default_mAs,
         "series_instance_uid": series_uid,

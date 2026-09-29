@@ -48,6 +48,20 @@ def test_dose_spec():
         core.DoseSpec("foo").ratio_for(100)
 
 
+def test_mu_water_for_kvp():
+    #NIST表の点はそのまま再現される
+    assert core.water_mu_at_kev(60) == pytest.approx(0.2059)
+    mus = [core.mu_water_for_kvp(k) for k in (80, 100, 120, 140)]
+    assert mus == sorted(mus, reverse=True)              #高管電圧ほど小さい
+    assert mus[0] == pytest.approx(0.227, abs=0.003)
+    assert mus[2] == pytest.approx(0.202, abs=0.003)
+    assert mus[3] == pytest.approx(0.194, abs=0.003)
+    assert core.mu_water_for_kvp(None) == core.mu_water_for_kvp(120)
+    #手入力が優先される
+    assert core.Simulator(cfg(mu_water=0.25), kvp=80).mu_water == 0.25
+    assert core.Simulator(cfg(), kvp=80).mu_water == pytest.approx(mus[0])
+
+
 def test_clean_reconstruction_preserves_hu():
     hu = water_phantom()
     with core.Simulator(cfg()) as sim:
@@ -186,6 +200,8 @@ def test_process_series_writes_valid_dicom(ct_folder, tmp_path):
     assert summary["slices"][0]["dose_ratio"] == pytest.approx(0.25)
     params = json.loads((out / core.PARAMS_FILENAME).read_text(encoding="utf-8"))
     assert params["config"]["photons_per_mAs"] == 5000
+    assert params["kvp"] == 120
+    assert params["mu_water_used"] == pytest.approx(core.mu_water_for_kvp(120))
 
     orig = pydicom.dcmread(s.paths[0])
     new = pydicom.dcmread(str(out / os.path.basename(s.paths[0])))

@@ -35,7 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--angles", type=int, default=core.SimConfig.num_angles, help="投影数")
     p.add_argument("--det-spacing", type=float, default=core.SimConfig.det_spacing, help="検出器ピッチ [画素]")
     p.add_argument("--sigma-readout", type=float, default=core.SimConfig.sigma_readout, help="電子ノイズSD [カウント]")
-    p.add_argument("--mu-water", type=float, default=core.SimConfig.mu_water, help="水の線減弱係数 [1/cm]")
+    p.add_argument("--mu-water", type=float, default=None,
+                   help="水の線減弱係数 [1/cm] (省略時はDICOMの管電圧から自動)")
     p.add_argument("--full-noise", action="store_true", help="元画像をノイズなしとみなしてフルのノイズを付加する")
     p.add_argument("--reproject", action="store_true",
                    help="ノイズ画像の加算ではなく、画像全体を再投影→FBPし直す (解像度が低下する)")
@@ -87,7 +88,7 @@ def main(argv=None) -> int:
                 samples[s_idx] = core.CalibrationSample(hu, core.pixel_size_cm(ds), mAs, [])
             smp = samples[s_idx]
             smp.masks.append(core.circle_mask(smp.hu.shape, r, c, rad))
-        with core.Simulator(cfg) as sim:
+        with core.Simulator(cfg, kvp=series.kvp) as sim:
             res = sim.calibrate(list(samples.values()), log=print)
         cfg.photons_per_mAs = res.photons_per_mAs
         state = "収束" if res.converged else "未収束"
